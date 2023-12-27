@@ -222,6 +222,43 @@ void bye_reply_cb(struct cell *t, int type, struct tmcb_params *ps)
 	}
 }
 
+/*callback function to handle responses to the in-dialog request */
+void req_reply_cb(struct cell *t, int type, struct tmcb_params *ps)
+{
+
+	struct dlg_cell *dlg;
+	int event, old_state, new_state, unref, ret;
+	struct dlg_cell_out *dlg_out = 0;
+
+	if(ps->param == NULL || *ps->param == NULL) {
+		LM_ERR("invalid parameter\n");
+		return;
+	}
+
+	if(ps->code < 200) {
+		LM_DBG("receiving a provisional reply\n");
+		return;
+	}
+
+	LM_DBG("receiving a final reply %d\n", ps->code);
+
+	dlg = (struct dlg_cell *)(*(ps->param));
+	event = DLG_EVENT_REQBYE;
+
+	//get the corresponding dlg out structure for this REQ
+	struct dlg_entry_out *dlg_entry_out = &dlg->dlg_entry_out;
+	lock_get(dlg->dlg_out_entries_lock);
+	dlg_out = dlg_entry_out->first; //TODO check for concurrent call
+	if(!dlg_out)
+		return;
+
+	next_state_dlg(
+			dlg, event, &old_state, &new_state, &unref, &dlg_out->to_tag);
+
+	lock_release(dlg->dlg_out_entries_lock);
+}
+
+
 static inline int build_extra_hdr(
 		struct dlg_cell *cell, str *extra_hdrs, str *str_hdr)
 {
@@ -304,6 +341,55 @@ err:
 		free_tm_dlg(dialog_info);
 	return -1;
 }
+
+/* cell- pointer to a struct dlg_cell
+ * dir- direction: the request will be sent to:
+ * 		DLG_CALLER_LEG (0): caller
+ * 		DLG_CALLEE_LEG (1): callee
+ */
+static inline int send_req(struct dlg_cell *cell, int dir, str *hdrs)
+{
+	uac_req_t uac_r;
+	dlg_t *dialog_info;
+	str met = {"BYE", 3}; // TODO: use request type sent in rpc
+	int result;
+
+	/*verify direction*/
+	if((dialog_info = build_dlg_t(cell, dir)) == 0) {
+		LM_ERR("failed to create dlg_t\n");
+		goto err;
+	}
+
+	LM_DBG("sending request to %s\n",
+			(dir == DLG_CALLER_LEG) ? "caller" : "callee");
+
+	ref_dlg(cell, 1);
+
+	memset(&uac_r, '\0', sizeof(uac_req_t));
+	set_uac_req(&uac_r, &met, hdrs, NULL, dialog_info, TMCB_LOCAL_COMPLETED,
+			req_reply_cb, (void *)cell);
+
+	result = d_tmb.t_request_within(&uac_r);
+
+	if(result < 0) {
+		LM_ERR("failed to send the request\n");
+		goto err1;
+	}
+
+	free_tm_dlg(dialog_info);
+
+	LM_DBG("Request sent to %s\n", (dir == 0) ? "caller" : "callee");
+	return 0;
+
+err1:
+	unref_dlg(cell, 1);
+err:
+	if(dialog_info)
+		free_tm_dlg(dialog_info);
+	return -1;
+}
+
+
 
 /*static void early_transaction_destroyed(struct cell* t, int type, struct tmcb_params *param) {
     struct dlg_cell *dlg = (struct dlg_cell *) (*param->param);

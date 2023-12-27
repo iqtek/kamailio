@@ -3101,6 +3101,8 @@ static const char *rpc_print_dlg_ctx_doc[2] = {
 		0};
 static const char *rpc_end_dlg_entry_id_doc[2] = {
 		"End a given dialog based on [h_entry] [h_id]", 0};
+static const char *rpc_req_within_entry_id_doc[2] = {
+		"Send request within given dialog based on [h_entry] [h_id]", 0};
 static const char *rpc_dlg_terminate_dlg_doc[2] = {
 		"End a given dialog based on callid", 0};
 static const char *rpc_dlg_set_state_doc[3] = {
@@ -3312,6 +3314,34 @@ static void rpc_end_dlg_entry_id(rpc_t *rpc, void *c)
 	dlg_bye_all(dlg, (rpc_extra_hdrs.len > 0) ? &rpc_extra_hdrs : NULL);
 	dlg_release(dlg);
 }
+
+static void rpc_req_within_entry_id(rpc_t *rpc, void *c)
+{
+	unsigned int h_entry, h_id;
+	dlg_cell_t *dlg = NULL;
+	str rpc_extra_hdrs = {NULL, 0};
+	int n;
+
+	n = rpc->scan(c, "dd", &h_entry, &h_id);
+	if(n < 2) {
+		LM_ERR("unable to read the parameters (%d)\n", n);
+		rpc->fault(c, 500, "Invalid parameters");
+		return;
+	}
+	if(rpc->scan(c, "*S", &rpc_extra_hdrs) < 1) {
+		rpc_extra_hdrs.s = NULL;
+		rpc_extra_hdrs.len = 0;
+	}
+
+	dlg = dlg_lookup(h_entry, h_id);
+	if(dlg == NULL) {
+		rpc->fault(c, 404, "Dialog not found");
+		return;
+	}
+
+	dlg_send_req(dlg, "caller", (rpc_extra_hdrs.len > 0) ? &rpc_extra_hdrs : NULL);
+}
+
 static void rpc_profile_get_size(rpc_t *rpc, void *c)
 {
 	str profile_name = {NULL, 0};
@@ -3741,6 +3771,7 @@ static rpc_export_t rpc_methods[] = {
 		{"dlg.dlg_list", rpc_print_dlg, rpc_print_dlg_doc, 0},
 		{"dlg.dlg_list_ctx", rpc_print_dlg_ctx, rpc_print_dlg_ctx_doc, 0},
 		{"dlg.end_dlg", rpc_end_dlg_entry_id, rpc_end_dlg_entry_id_doc, 0},
+		{"dlg.req_within", rpc_req_within_entry_id, rpc_req_within_entry_id_doc, 0},
 		{"dlg.profile_get_size", rpc_profile_get_size, rpc_profile_get_size_doc,
 				0},
 		{"dlg.profile_list", rpc_profile_print_dlgs, rpc_profile_print_dlgs_doc,
